@@ -16,10 +16,10 @@
 # limitations under the License.
 #
 
-Ohai.plugin do
+Ohai.plugin(:Virtualization) do
   provides "virtualization"
 
-  collect_data do
+  collect_data(:linux) do
     virtualization Mash.new
 
     # if it is possible to detect paravirt vs hardware virt, it should be put in
@@ -56,9 +56,6 @@ Ohai.plugin do
       elsif modules =~ /^vboxdrv/
         virtualization[:system] = "vbox"
         virtualization[:role] = "host"
-      elsif modules =~ /^vboxguest/
-        virtualization[:system] = "vbox"
-        virtualization[:role] = "guest"
       end
     end
 
@@ -68,7 +65,7 @@ Ohai.plugin do
     # It would be great if we could read pv_info in the kernel
     # Wait for reply to: http://article.gmane.org/gmane.comp.emulators.kvm.devel/27885
     if File.exists?("/proc/cpuinfo")
-      if File.read("/proc/cpuinfo") =~ /QEMU Virtual CPU/
+      if File.read("/proc/cpuinfo") =~ /QEMU Virtual CPU|Common KVM processor|Common 32-bit KVM processor/
         virtualization[:system] = "kvm"
         virtualization[:role] = "guest"
       end
@@ -101,6 +98,11 @@ Ohai.plugin do
       when /Manufacturer: Xen/
         if so.stdout =~ /Product Name: HVM domU/
           virtualization[:system] = "xen"
+          virtualization[:role] = "guest"
+        end
+      when /Manufacturer: Oracle Corporation/
+        if so.stdout =~ /Product Name: VirtualBox/
+          virtualization[:system] = "vbox"
           virtualization[:role] = "guest"
         end
       else

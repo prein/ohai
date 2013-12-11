@@ -19,26 +19,29 @@
 require 'ohai/loader'
 require 'ohai/log'
 require 'ohai/mash'
-require 'ohai/os'
 require 'ohai/runner'
 require 'ohai/dsl/plugin'
 require 'ohai/mixin/from_file'
 require 'ohai/mixin/command'
+require 'ohai/mixin/os'
 require 'ohai/mixin/string'
+require 'ohai/provides_map'
 require 'mixlib/shellout'
 
 require 'yajl'
 
 module Ohai
+
   class System
     attr_accessor :data
-    attr_reader :attributes
+    attr_reader :provides_map
     attr_reader :hints
     attr_reader :v6_dependency_solver
 
     def initialize
       @data = Mash.new
-      @attributes = Mash.new
+      @provides_map = ProvidesMap.new
+
       @hints = Hash.new
       @v6_dependency_solver = Hash.new
       @plugin_path = ""
@@ -51,18 +54,26 @@ module Ohai
       @data[key]
     end
 
+    #=============================================
+    #  Version 7 system commands
+    #=============================================
+    def all_plugins
+      load_plugins
+      run_plugins(true)
+    end
+
     def load_plugins
       Ohai::Config[:plugin_path].each do |path|
         [
          Dir[File.join(path, '*')],
-         Dir[File.join(path, Ohai::OS.collect_os, '**', '*')]
+         Dir[File.join(path, Ohai::Mixin::OS.collect_os, '**', '*')]
         ].flatten.each do |file|
           file_regex = Regexp.new("#{File.expand_path(path)}#{File::SEPARATOR}(.+).rb$")
           md = file_regex.match(file)
           if md
             plugin_name = md[1].gsub(File::SEPARATOR, "::")
             unless @v6_dependency_solver.has_key?(plugin_name)
-              plugin = @loader.load_plugin(file)
+              plugin = @loader.load_plugin(file, plugin_name)
               @v6_dependency_solver[plugin_name] = plugin unless plugin.nil?
             else
               Ohai::Log.debug("Already loaded plugin at #{file}")
@@ -84,65 +95,37 @@ module Ohai
       end
 
       # collect and run version 7 plugins
-      plugins = collect_providers(@attributes)
+      plugins = @provides_map.all_plugins
+
       begin
         plugins.each { |plugin| @runner.run_plugin(plugin, force) }
-      rescue DependencyCycleError, NoAttributeError => e
+      rescue Ohai::Exceptions::AttributeNotFound, Ohai::Exceptions::DependencyCycle => e
         Ohai::Log.error("Encountered error while running plugins: #{e.inspect}")
         raise
       end
       true
     end
 
-    def all_plugins
-      load_plugins
-      run_plugins(true)
-    end
-
-    def collect_providers(providers)
-      plugins = []
-      if providers.is_a?(Mash)
-        providers.keys.each do |provider|
-          if provider.eql?("providers")
-            plugins << providers[provider]
+    def collect_plugins(plugins)
+      collected = []
+      if plugins.is_a?(Mash)
+        # TODO: remove this branch
+        plugins.keys.each do |plugin|
+          if plugin.eql?("_plugins")
+            collected << plugins[plugin]
           else
-            plugins << collect_providers(providers[provider])
+            collected << collect_plugins(plugins[plugin])
           end
         end
       else
-        plugins << providers
+        collected << plugins
       end
-      plugins.flatten.uniq
+      collected.flatten.uniq
     end
 
-    # todo: fixup for running w/ new internals
-    def refresh_plugins(path = '/')
-      parts = path.split('/')
-      if parts.length == 0
-        h = @metadata
-      else
-        parts.shift if parts[0].length == 0
-        h = @metadata
-        parts.each do |part|
-          break unless h.has_key?(part)
-          h = h[part]
-        end
-      end
-
-      refreshments = collect_providers(h)
-      Ohai::Log.debug("Refreshing plugins: #{refreshments.join(", ")}")
-      
-      # remove the hints cache
-      @hints = Hash.new
-
-      refreshments.each do |r|
-        @seen_plugins.delete(r) if @seen_plugins.has_key?(r)
-      end
-      refreshments.each do |r|
-        require_plugin(r) unless @seen_plugins.has_key?(r)
-      end
-    end
-
+    #=============================================
+    # Version 6 system commands
+    #=============================================
     def require_plugin(plugin_name, force=false)
       unless force
         plugin = @v6_dependency_solver[plugin_name]
@@ -178,7 +161,7 @@ module Ohai
       Ohai::Config[:plugin_path].each do |path|
         check_path = File.expand_path(File.join(path, filename))
         if File.exist?(check_path)
-          plugin = @loader.load_plugin(check_path)
+          plugin = @loader.load_plugin(check_path, plugin_name)
           @v6_dependency_solver[plugin_name] = plugin
           break
         else
@@ -188,6 +171,38 @@ module Ohai
       plugin
     end
 
+    # todo: fix for running w/new internals
+    # add updated function to v7?
+    def refresh_plugins(path = '/')
+      parts = path.split('/')
+      if parts.length == 0
+        h = @metadata
+      else
+        parts.shift if parts[0].length == 0
+        h = @metadata
+        parts.each do |part|
+          break unless h.has_key?(part)
+          h = h[part]
+        end
+      end
+
+      refreshments = collect_plugins(h)
+      Ohai::Log.debug("Refreshing plugins: #{refreshments.join(", ")}")
+      
+      # remove the hints cache
+      @hints = Hash.new
+
+      refreshments.each do |r|
+        @seen_plugins.delete(r) if @seen_plugins.has_key?(r)
+      end
+      refreshments.each do |r|
+        require_plugin(r) unless @seen_plugins.has_key?(r)
+      end
+    end
+
+    #=============================================
+    # For outputting an Ohai::System object
+    #=============================================
     # Serialize this object as a hash
     def to_json
       Yajl::Encoder.new.encode(@data)

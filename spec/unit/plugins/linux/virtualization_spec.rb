@@ -21,7 +21,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper.rb')
 describe Ohai::System, "Linux virtualization platform" do
   before(:each) do
     @plugin = get_plugin("linux/virtualization")
-    @plugin[:os] = "linux"
+    @plugin.stub(:collect_os).and_return(:linux)
     @plugin.extend(SimpleFromFile)
 
     # default to all requested Files not existing
@@ -86,6 +86,22 @@ describe Ohai::System, "Linux virtualization platform" do
       @plugin[:virtualization][:role].should == "guest"
     end
 
+    it "should set kvm guest if /proc/cpuinfo contains Common KVM processor" do
+      File.should_receive(:exists?).with("/proc/cpuinfo").and_return(true)
+      File.stub(:read).with("/proc/cpuinfo").and_return("Common KVM processor")
+      @plugin.run
+      @plugin[:virtualization][:system].should == "kvm"
+      @plugin[:virtualization][:role].should == "guest"
+    end
+
+    it "should set kvm guest if /proc/cpuinfo contains Common 32-bit KVM processor" do
+      File.should_receive(:exists?).with("/proc/cpuinfo").and_return(true)
+      File.stub(:read).with("/proc/cpuinfo").and_return("Common 32-bit KVM processor")
+      @plugin.run
+      @plugin[:virtualization][:system].should == "kvm"
+      @plugin[:virtualization][:role].should == "guest"
+    end
+
     it "should not set virtualization if kvm isn't there" do
       File.should_receive(:exists?).at_least(:once).and_return(false)
       @plugin.run
@@ -100,14 +116,6 @@ describe Ohai::System, "Linux virtualization platform" do
       @plugin.run
       @plugin[:virtualization][:system].should == "vbox"
       @plugin[:virtualization][:role].should == "host"
-    end
-
-    it "should set vbox guest if /proc/modules contains vboxguest" do
-      File.should_receive(:exists?).with("/proc/modules").and_return(true)
-      File.stub(:read).with("/proc/modules").and_return("vboxguest 177749 2 vboxsf")
-      @plugin.run
-      @plugin[:virtualization][:system].should == "vbox"
-      @plugin[:virtualization][:role].should == "guest"
     end
 
     it "should not set virtualization if vbox isn't there" do
@@ -153,6 +161,26 @@ VMWARE
       @plugin.stub(:shell_out).with("dmidecode").and_return(mock_shell_out(0, vmware_dmidecode, ""))
       @plugin.run
       @plugin[:virtualization][:system].should == "vmware"
+      @plugin[:virtualization][:role].should == "guest"
+    end
+
+    it "should set vbox guest if dmidecode detects Oracle Corporation" do
+      vbox_dmidecode=<<-VBOX
+Base Board Information
+  Manufacturer: Oracle Corporation
+  Product Name: VirtualBox
+  Version: 1.2
+  Serial Number: 0
+  Asset Tag: Not Specified
+  Features:
+        Board is a hosting board
+  Location In Chasis: Not Specified
+  Type: Motherboard
+  Contained Object Handles: 0
+VBOX
+      @plugin.stub(:shell_out).with("dmidecode").and_return(mock_shell_out(0, vbox_dmidecode, ""))
+      @plugin.run
+      @plugin[:virtualization][:system].should == "vbox"
       @plugin[:virtualization][:role].should == "guest"
     end
 

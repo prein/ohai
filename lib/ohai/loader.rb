@@ -25,10 +25,15 @@ module Ohai
 
     def initialize(controller)
       @controller = controller
-      @attributes = controller.attributes
     end
 
-    def load_plugin(plugin_path)
+    def provides_map
+      @controller.provides_map
+    end
+
+    # @note: plugin_name is used only by version 6 plugins and is the
+    # unique part of the file name from Ohai::Config[:plugin_path]
+    def load_plugin(plugin_path, plugin_name=nil)
       plugin = nil
 
       contents = ""
@@ -45,6 +50,8 @@ module Ohai
           plugin = klass.new(@controller, plugin_path) unless klass.nil?
         rescue SystemExit, Interrupt
           raise
+        rescue Ohai::Exceptions::IllegalPluginDefinition => e
+          Ohai::Log.warn("Plugin at #{plugin_path} is not properly defined: #{e.inspect}") 
         rescue NoMethodError => e
           Ohai::Log.warn("[UNSUPPORTED OPERATION] Plugin at #{plugin_path} used unsupported operation \'#{e.name.to_s}\'")
         rescue Exception, Errno::ENOENT => e
@@ -54,8 +61,8 @@ module Ohai
         return plugin if plugin.nil?
         collect_provides(plugin)
       else
-        Ohai::Log.warn("[DEPRECATION] Plugin at #{plugin_path} is a version 6 plugin. Version 6 plugins will not be supported in future releases of Ohai. Please upgrage your plugin to version 7 plugin syntax. For more information visit here: XXX")
-        klass = Ohai.v6plugin { collect_contents(contents) }
+        Ohai::Log.warn("[DEPRECATION] Plugin at #{plugin_path} is a version 6 plugin. Version 6 plugins will not be supported in future releases of Ohai. Please upgrage your plugin to version 7 plugin syntax. For more information visit here: docs.opscode.com/ohai_custom.html")
+        klass = Ohai.v6plugin(plugin_name) { collect_contents(contents) }
         plugin = klass.new(@controller, plugin_path)
       end
 
@@ -64,21 +71,7 @@ module Ohai
 
     def collect_provides(plugin)
       plugin_provides = plugin.class.provides_attrs
-      
-      plugin_provides.each do |attr|
-        parts = attr.split('/')
-        a = @attributes
-        unless parts.length == 0
-          parts.shift if parts[0].length == 0
-          parts.each do |part|
-            a[part] ||= Mash.new
-            a = a[part]
-          end
-        end
-
-        a[:providers] ||= []
-        a[:providers] << plugin
-      end
+      provides_map.set_providers_for(plugin, plugin_provides)
     end
 
   end
